@@ -10,32 +10,37 @@ export const uploadImage = async (
     bucket: string = 'school-images'
 ) => {
     try {
-        // 1. ตรวจสอบ Session ก่อน (สำคัญมาก)
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-            console.error('User is not authenticated');
-            throw new Error('กรุณาเข้าสู่ระบบก่อนทำการอัปโหลด');
+        // 1. ตรวจสอบ Session และ User (เพื่อยืนยันว่า Logged in จริงไหม)
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        
+        if (authError || !user) {
+            console.error('[Storage] Auth Error:', authError);
+            throw new Error('กรุณาเข้าสู่ระบบใหม่ (Session อาจหมดอายุ) ก่อนทำการอัปโหลด');
         }
+
+        console.log(`[Storage] ยืนยันตัวตนผู้ใช้สำเร็จ: ${user.email} (ID: ${user.id})`);
 
         // 2. จัดการเรื่องนามสกุลไฟล์และ Content Type
         let fileExt = 'webp';
         let contentType = 'image/webp';
 
         if (file instanceof File) {
-            fileExt = file.name.split('.').pop() || 'webp';
+            const parts = file.name.split('.');
+            fileExt = parts.length > 1 ? parts.pop()! : 'jpg';
             contentType = file.type;
         } else if (customFileName) {
-            fileExt = customFileName.split('.').pop() || 'webp';
+            const parts = customFileName.split('.');
+            fileExt = parts.length > 1 ? parts.pop()! : 'webp';
         }
 
-        // 3. สร้างชื่อไฟล์แบบสุ่มเพื่อป้องกันชื่อซ้ำและปัญหาภาษาไทยในชื่อไฟล์
-        const randomName = Math.random().toString(36).substring(2, 10);
+        // 3. สร้างชื่อไฟล์แบบสุ่ม (ป้องกันอักขระพิเศษและชื่อซ้ำ)
+        const randomName = Math.random().toString(36).substring(2, 12);
         const filePath = `${Date.now()}_${randomName}.${fileExt}`;
 
-        console.log(`[Storage] เริ่มอัปโหลดไฟล์: ${filePath} ไปยัง Bucket: ${bucket}`);
+        console.log(`[Storage] เริ่มอัปโหลดไฟล์ไปที่ Bucket: "${bucket}", Path: "${filePath}"`);
 
         // 4. อัปโหลดไปยัง Supabase
-        const { error: uploadError, data } = await supabase.storage
+        const { error: uploadError } = await supabase.storage
             .from(bucket)
             .upload(filePath, file, {
                 contentType: contentType,
@@ -44,30 +49,31 @@ export const uploadImage = async (
             });
 
         if (uploadError) {
-            console.error('[Storage] Supabase Upload Error:', uploadError);
-            // ตรวจสอบ Error เฉพาะทาง
+            console.error('[Storage] รายละเอียด Error จาก Supabase:', uploadError);
+            
+            // แยกแยะ Error เพื่อให้แก้ปัญหาได้ตรงจุด
             if (uploadError.message.includes('bucket_not_found')) {
-                throw new Error(`ไม่พบ Bucket ชื่อ "${bucket}" กรุณาตรวจสอบใน Supabase Dashboard`);
+                throw new Error(`ไม่พบ Bucket ชื่อ "${bucket}" กรุณาไปสร้าง Bucket ในหน้า Storage ของ Supabase`);
             }
-            if (uploadError.message.includes('Unauthorized') || (uploadError as any).status === 403) {
-                throw new Error('คุณไม่มีสิทธิ์อัปโหลดไฟล์ (Permission Denied) กรุณาตรวจสอบ RLS Policy');
+            if (uploadError.message.includes('Unauthorized') || (uploadError as any).status === 403 || (uploadError as any).status === 401) {
+                throw new Error('สิทธิ์การเข้าถึงถูกปฏิเสธ (403/401): กรุณารัน SQL เพื่อตั้งค่า Storage Policies (RLS)');
             }
             throw new Error(`อัปโหลดล้มเหลว: ${uploadError.message}`);
         }
 
-        // 5. ดึง Public URL
+        // 5. ดึง Public URL (ต้องแน่ใจว่า Bucket ตั้งเป็น Public ไว้)
         const { data: { publicUrl } } = supabase.storage
             .from(bucket)
             .getPublicUrl(filePath);
 
         if (!publicUrl) {
-            throw new Error('ไม่สามารถสร้าง URL สำหรับรูปภาพได้');
+            throw new Error('ไม่สามารถรับ Public URL ของไฟล์ได้');
         }
 
-        console.log('[Storage] อัปโหลดสำเร็จ! URL:', publicUrl);
+        console.log('[Storage] อัปโหลดสำเร็จ! URL ของคุณคือ:', publicUrl);
         return publicUrl;
     } catch (error: any) {
-        console.error('[Storage] Error in storageUtils:', error);
+        console.error('[Storage] Exception:', error);
         throw error;
     }
 };
@@ -87,7 +93,7 @@ export const extractStoragePath = (url: string | null | undefined, bucket: strin
             return url.substring(index + storagePattern.length);
         }
     } catch (e) {
-        console.error('Error extracting path:', e);
+        console.error('[Storage] Error extracting path:', e);
     }
 
     return null;
