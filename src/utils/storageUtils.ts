@@ -1,7 +1,8 @@
 import { supabase } from '@/integrations/supabase/client';
 
 /**
- * ฟังก์ชันสำหรับอัปโหลดรูปภาพ (รองรับทั้ง File ปกติ และ Blob จากการบีบอัด)
+ * ฟังก์ชันสำหรับอัปโหลดรูปภาพไปยัง Supabase Storage
+ * รองรับทั้ง File ปกติ และ Blob (ที่ได้จากการบีบอัด)
  */
 export const uploadImage = async (
     file: File | Blob, 
@@ -9,8 +10,8 @@ export const uploadImage = async (
     bucket: string = 'school-images'
 ) => {
     try {
-        // 1. ตรวจสอบนามสกุลไฟล์และประเภทไฟล์ (MIME Type)
-        let fileExt = 'webp';
+        // 1. จัดการเรื่องนามสกุลไฟล์
+        let fileExt = 'webp'; // ค่าเริ่มต้นถ้าเป็น Blob จากการบีบอัด
         let contentType = 'image/webp';
 
         if (file instanceof File) {
@@ -20,13 +21,14 @@ export const uploadImage = async (
             fileExt = customFileName.split('.').pop() || 'webp';
         }
 
+        // 2. สร้างชื่อไฟล์แบบสุ่มเพื่อป้องกันชื่อซ้ำ
         const randomName = Math.random().toString(36).substring(2, 10);
         const filePath = `${Date.now()}_${randomName}.${fileExt}`;
 
-        console.log(`กำลังอัปโหลดไปที่ Bucket: ${bucket}, Path: ${filePath}`);
+        console.log(`กำลังเริ่มอัปโหลดไปยัง Bucket: ${bucket}...`);
 
-        // 2. อัปโหลดไฟล์ไปที่ Supabase
-        const { error: uploadError, data } = await supabase.storage
+        // 3. อัปโหลดไปยัง Supabase
+        const { error: uploadError } = await supabase.storage
             .from(bucket)
             .upload(filePath, file, {
                 contentType: contentType,
@@ -34,30 +36,30 @@ export const uploadImage = async (
             });
 
         if (uploadError) {
-            // ถ้าเกิด Error bucketnotfound ให้ตรวจสอบชื่อ Bucket ใน Dashboard
-            console.error('รายละเอียด Error การอัปโหลด:', uploadError);
-            throw new Error(`อัปโหลดล้มเหลว: ${uploadError.message}`);
+            console.error('Supabase Upload Error:', uploadError);
+            throw new Error(`ไม่สามารถอัปโหลดได้: ${uploadError.message}`);
         }
 
-        // 3. ดึง Public URL กลับมา
+        // 4. ดึง Public URL
         const { data: { publicUrl } } = supabase.storage
             .from(bucket)
             .getPublicUrl(filePath);
 
+        console.log('อัปโหลดสำเร็จ! URL:', publicUrl);
         return publicUrl;
     } catch (error: any) {
-        console.error('เกิดข้อผิดพลาดใน storageUtils:', error);
+        console.error('Error in storageUtils:', error);
         throw error;
     }
 };
 
 /**
- * ดึง Path ของไฟล์จาก URL เพื่อใช้ในการลบ
+ * ดึง Path ของไฟล์จาก URL (ใช้สำหรับตอนสั่งลบไฟล์)
  */
 export const extractStoragePath = (url: string | null | undefined, bucket: string = 'school-images'): string | null => {
     if (!url) return null;
     
-    // รูปแบบ URL ของ Supabase: .../storage/v1/object/public/<bucket>/<path>
+    // รูปแบบ URL: https://[project].supabase.co/storage/v1/object/public/[bucket]/[path]
     const storagePattern = `/storage/v1/object/public/${bucket}/`;
     const index = url.indexOf(storagePattern);
     
@@ -75,14 +77,14 @@ export const deleteStorageImage = async (url: string | null | undefined, bucket:
     const filePath = extractStoragePath(url, bucket);
     
     if (!filePath) {
-        console.warn('ไม่พบ Path ใน URL หรือ URL ไม่ใช่ของ Storage นี้:', url);
+        console.warn('ไม่สามารถระบุตำแหน่งไฟล์เพื่อลบได้:', url);
         return false;
     }
 
     try {
         const { error } = await supabase.storage.from(bucket).remove([filePath]);
         if (error) {
-            console.error('ลบไฟล์ไม่สำเร็จ:', error);
+            console.error('ลบไฟล์ล้มเหลว:', error);
             return false;
         }
         return true;
