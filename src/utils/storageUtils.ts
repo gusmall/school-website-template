@@ -1,83 +1,103 @@
+วิธีแก้ไขปัญหา Error: storage/unauthorized
+
+สาเหตุเกิดจาก Supabase Storage ยังไม่มีการตั้งค่า Policies เพื่ออนุญาตให้ผู้ใช้งาน (Admin) สามารถอัปโหลดไฟล์ลงใน Bucket ได้
+
+ขั้นตอนการแก้ไข
+
+เข้าไปที่ Supabase Dashboard ของโปรเจกต์คุณ
+
+ไปที่เมนู SQL Editor ทางด้านซ้าย
+
+คลิก New Query
+
+คัดลอกโค้ด SQL ด้านล่างนี้ไปวางและกด Run
+
+-- 1. สร้าง Bucket ชื่อ school-images (หากยังไม่มี)
+insert into storage.buckets (id, name, public)
+values ('school-images', 'school-images', true)
+on conflict (id) do nothing;
+
+-- 2. ตั้งค่าให้ทุกคนสามารถดูรูปภาพได้ (Public Access)
+create policy "Public Access"
+on storage.objects for select
+using ( bucket_id = 'school-images' );
+
+-- 3. ตั้งค่าให้เฉพาะผู้ที่ Login แล้วเท่านั้นที่สามารถอัปโหลดรูปภาพได้
+create policy "Authenticated users can upload images"
+on storage.objects for insert
+to authenticated
+with check ( bucket_id = 'school-images' );
+
+-- 4. ตั้งค่าให้เฉพาะผู้ที่ Login แล้วเท่านั้นที่สามารถแก้ไขรูปภาพได้
+create policy "Authenticated users can update images"
+on storage.objects for update
+to authenticated
+using ( bucket_id = 'school-images' );
+
+-- 5. ตั้งค่าให้เฉพาะผู้ที่ Login แล้วเท่านั้นที่สามารถลบรูปภาพได้
+create policy "Authenticated users can delete images"
+on storage.objects for delete
+to authenticated
+using ( bucket_id = 'school-images' );
+
+
+คำอธิบายเพิ่มเติม
+
+Public Access: อนุญาตให้หน้าเว็บแสดงผลรูปภาพได้โดยไม่ต้องใช้ Token
+
+Authenticated users: ระบบจะตรวจสอบว่าคุณได้ Login เข้าหน้า Admin แล้วหรือยังก่อนจะอนุญาตให้อัปโหลด (ป้องกันคนแปลกหน้ามาอัปโหลดไฟล์ทับไฟล์เดิมของคุณ)
+
+ตรวจสอบความถูกต้องของโค้ด (src/utils/storageUtils.ts)
+
+เพื่อให้ระบบทำงานได้อย่างสมบูรณ์ คุณควรตรวจสอบให้แน่ใจว่าฟังก์ชันต่างๆ ใน src/utils/storageUtils.ts ใช้ชื่อ bucket ที่ตรงกับในฐานข้อมูล (ในที่นี้คือ school-images) ดังนี้:
+
 import { supabase } from '@/integrations/supabase/client';
 
 /**
- * Extracts the file path from a Supabase Storage public URL
- * @param url - The full public URL of the image
- * @param bucket - The storage bucket name (default: 'images')
- * @returns The file path within the bucket, or null if not a valid storage URL
+ * ฟังก์ชันสำหรับอัปโหลดรูปภาพ
  */
-export const extractStoragePath = (url: string | null | undefined, bucket: string = 'images'): string | null => {
-    if (!url) return null;
+export const uploadImage = async (file: File, bucket: string = 'school-images') => {
+    const fileExt = file.name.split('.').pop();
+    const filePath = `${Math.random().toString(36).substring(2)}.${fileExt}`;
 
-    // Handle Supabase storage URLs
-    // Format: https://<project>.supabase.co/storage/v1/object/public/<bucket>/<path>
-    const storagePattern = `/storage/v1/object/public/${bucket}/`;
-    const index = url.indexOf(storagePattern);
+    const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(filePath, file);
 
-    if (index !== -1) {
-        return url.substring(index + storagePattern.length);
-    }
+    if (uploadError) throw uploadError;
 
-    return null;
+    const { data: { publicUrl } } = supabase.storage
+        .from(bucket)
+        .getPublicUrl(filePath);
+
+    return publicUrl;
 };
 
 /**
- * Deletes an image from Supabase Storage
- * @param url - The full public URL of the image to delete
- * @param bucket - The storage bucket name (default: 'images')
- * @returns true if deleted successfully, false otherwise
+ * ดึง Path ของไฟล์จาก URL (สำคัญ: ต้องใช้ bucket name ให้ตรงกัน)
  */
-export const deleteStorageImage = async (url: string | null | undefined, bucket: string = 'images'): Promise<boolean> => {
-    const filePath = extractStoragePath(url, bucket);
+export const extractStoragePath = (url: string | null | undefined, bucket: string = 'school-images'): string | null => {
+    if (!url) return null;
+    const storagePattern = `/storage/v1/object/public/${bucket}/`;
+    const index = url.indexOf(storagePattern);
+    return index !== -1 ? url.substring(index + storagePattern.length) : null;
+};
 
-    if (!filePath) {
-        console.log('Not a valid storage URL, skipping deletion:', url);
-        return false;
-    }
+/**
+ * ลบรูปภาพออกจาก Storage
+ */
+export const deleteStorageImage = async (url: string | null | undefined, bucket: string = 'school-images'): Promise<boolean> => {
+    const filePath = extractStoragePath(url, bucket);
+    if (!filePath) return false;
 
     try {
         const { error } = await supabase.storage.from(bucket).remove([filePath]);
-
-        if (error) {
-            console.error('Error deleting file from storage:', error);
-            return false;
-        }
-
-        console.log('Successfully deleted file from storage:', filePath);
-        return true;
+        return !error;
     } catch (error) {
-        console.error('Error deleting file from storage:', error);
+        console.error('Error deleting file:', error);
         return false;
     }
 };
 
-/**
- * Deletes multiple images from Supabase Storage
- * @param urls - Array of image URLs to delete
- * @param bucket - The storage bucket name (default: 'images')
- * @returns Number of successfully deleted files
- */
-export const deleteMultipleStorageImages = async (urls: (string | null | undefined)[], bucket: string = 'images'): Promise<number> => {
-    const filePaths = urls
-        .map(url => extractStoragePath(url, bucket))
-        .filter((path): path is string => path !== null);
 
-    if (filePaths.length === 0) {
-        return 0;
-    }
-
-    try {
-        const { error } = await supabase.storage.from(bucket).remove(filePaths);
-
-        if (error) {
-            console.error('Error deleting files from storage:', error);
-            return 0;
-        }
-
-        console.log('Successfully deleted files from storage:', filePaths);
-        return filePaths.length;
-    } catch (error) {
-        console.error('Error deleting files from storage:', error);
-        return 0;
-    }
-};
+หมายเหตุ: หากคุณใช้ชื่อ bucket อื่นที่ไม่ใช่ school-images ใน SQL คุณต้องมาเปลี่ยนค่า bucket: string = '...' ในโค้ดให้ตรงกันด้วยครับ
