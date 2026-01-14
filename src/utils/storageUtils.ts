@@ -49,4 +49,3 @@ export const deleteStorageImage = async (url: string | null | undefined, bucket:
 };
 
 
-หมายเหตุ: หากคุณใช้ชื่อ bucket อื่นที่ไม่ใช่ school-images ใน SQL คุณต้องมาเปลี่ยนค่า bucket: string = '...' ในโค้ดให้ตรงกันด้วยครับ
