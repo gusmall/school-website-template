@@ -10,8 +10,15 @@ export const uploadImage = async (
     bucket: string = 'school-images'
 ) => {
     try {
-        // 1. จัดการเรื่องนามสกุลไฟล์
-        let fileExt = 'webp'; // ค่าเริ่มต้นถ้าเป็น Blob จากการบีบอัด
+        // 1. ตรวจสอบ Session ก่อน (สำคัญมาก)
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+            console.error('User is not authenticated');
+            throw new Error('กรุณาเข้าสู่ระบบก่อนทำการอัปโหลด');
+        }
+
+        // 2. จัดการเรื่องนามสกุลไฟล์และ Content Type
+        let fileExt = 'webp';
         let contentType = 'image/webp';
 
         if (file instanceof File) {
@@ -21,34 +28,46 @@ export const uploadImage = async (
             fileExt = customFileName.split('.').pop() || 'webp';
         }
 
-        // 2. สร้างชื่อไฟล์แบบสุ่มเพื่อป้องกันชื่อซ้ำ
+        // 3. สร้างชื่อไฟล์แบบสุ่มเพื่อป้องกันชื่อซ้ำและปัญหาภาษาไทยในชื่อไฟล์
         const randomName = Math.random().toString(36).substring(2, 10);
         const filePath = `${Date.now()}_${randomName}.${fileExt}`;
 
-        console.log(`กำลังเริ่มอัปโหลดไปยัง Bucket: ${bucket}...`);
+        console.log(`[Storage] เริ่มอัปโหลดไฟล์: ${filePath} ไปยัง Bucket: ${bucket}`);
 
-        // 3. อัปโหลดไปยัง Supabase
-        const { error: uploadError } = await supabase.storage
+        // 4. อัปโหลดไปยัง Supabase
+        const { error: uploadError, data } = await supabase.storage
             .from(bucket)
             .upload(filePath, file, {
                 contentType: contentType,
-                upsert: true
+                upsert: true,
+                cacheControl: '3600'
             });
 
         if (uploadError) {
-            console.error('Supabase Upload Error:', uploadError);
-            throw new Error(`ไม่สามารถอัปโหลดได้: ${uploadError.message}`);
+            console.error('[Storage] Supabase Upload Error:', uploadError);
+            // ตรวจสอบ Error เฉพาะทาง
+            if (uploadError.message.includes('bucket_not_found')) {
+                throw new Error(`ไม่พบ Bucket ชื่อ "${bucket}" กรุณาตรวจสอบใน Supabase Dashboard`);
+            }
+            if (uploadError.message.includes('Unauthorized') || (uploadError as any).status === 403) {
+                throw new Error('คุณไม่มีสิทธิ์อัปโหลดไฟล์ (Permission Denied) กรุณาตรวจสอบ RLS Policy');
+            }
+            throw new Error(`อัปโหลดล้มเหลว: ${uploadError.message}`);
         }
 
-        // 4. ดึง Public URL
+        // 5. ดึง Public URL
         const { data: { publicUrl } } = supabase.storage
             .from(bucket)
             .getPublicUrl(filePath);
 
-        console.log('อัปโหลดสำเร็จ! URL:', publicUrl);
+        if (!publicUrl) {
+            throw new Error('ไม่สามารถสร้าง URL สำหรับรูปภาพได้');
+        }
+
+        console.log('[Storage] อัปโหลดสำเร็จ! URL:', publicUrl);
         return publicUrl;
     } catch (error: any) {
-        console.error('Error in storageUtils:', error);
+        console.error('[Storage] Error in storageUtils:', error);
         throw error;
     }
 };
@@ -59,12 +78,16 @@ export const uploadImage = async (
 export const extractStoragePath = (url: string | null | undefined, bucket: string = 'school-images'): string | null => {
     if (!url) return null;
     
-    // รูปแบบ URL: https://[project].supabase.co/storage/v1/object/public/[bucket]/[path]
-    const storagePattern = `/storage/v1/object/public/${bucket}/`;
-    const index = url.indexOf(storagePattern);
-    
-    if (index !== -1) {
-        return url.substring(index + storagePattern.length);
+    try {
+        // รูปแบบ URL ทั่วไปของ Supabase: https://[project].supabase.co/storage/v1/object/public/[bucket]/[path]
+        const storagePattern = `/storage/v1/object/public/${bucket}/`;
+        const index = url.indexOf(storagePattern);
+        
+        if (index !== -1) {
+            return url.substring(index + storagePattern.length);
+        }
+    } catch (e) {
+        console.error('Error extracting path:', e);
     }
 
     return null;
@@ -77,19 +100,20 @@ export const deleteStorageImage = async (url: string | null | undefined, bucket:
     const filePath = extractStoragePath(url, bucket);
     
     if (!filePath) {
-        console.warn('ไม่สามารถระบุตำแหน่งไฟล์เพื่อลบได้:', url);
+        console.warn('[Storage] ไม่สามารถระบุตำแหน่งไฟล์จาก URL ได้:', url);
         return false;
     }
 
     try {
         const { error } = await supabase.storage.from(bucket).remove([filePath]);
         if (error) {
-            console.error('ลบไฟล์ล้มเหลว:', error);
+            console.error('[Storage] ลบไฟล์ล้มเหลว:', error);
             return false;
         }
+        console.log('[Storage] ลบไฟล์สำเร็จ:', filePath);
         return true;
     } catch (error) {
-        console.error('เกิดข้อผิดพลาดขณะลบไฟล์:', error);
+        console.error('[Storage] เกิดข้อผิดพลาดขณะลบไฟล์:', error);
         return false;
     }
 };
