@@ -1,29 +1,46 @@
-
-
 import { supabase } from '@/integrations/supabase/client';
 
 /**
- * ฟังก์ชันสำหรับอัปโหลดรูปภาพ
+ * ฟังก์ชันสำหรับอัปโหลดรูปภาพ (รองรับทั้ง File ปกติ และ Blob จากการบีบอัด)
  */
-export const uploadImage = async (file: File, bucket: string = 'school-images') => {
-    const fileExt = file.name.split('.').pop();
-    const filePath = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+export const uploadImage = async (
+    file: File | Blob, 
+    customFileName?: string, 
+    bucket: string = 'school-images'
+) => {
+    try {
+        // 1. ตรวจสอบว่ามีการส่งชื่อไฟล์มาไหม ถ้าไม่มีให้สร้างใหม่
+        const fileExt = customFileName?.split('.').pop() || (file instanceof File ? file.name.split('.').pop() : 'webp');
+        const randomName = Math.random().toString(36).substring(2, 10);
+        const filePath = `${Date.now()}_${randomName}.${fileExt}`;
 
-    const { error: uploadError } = await supabase.storage
-        .from(bucket)
-        .upload(filePath, file);
+        // 2. อัปโหลดไฟล์ไปที่ Supabase
+        const { error: uploadError, data } = await supabase.storage
+            .from(bucket)
+            .upload(filePath, file, {
+                contentType: `image/${fileExt === 'webp' ? 'webp' : 'jpeg'}`,
+                upsert: true
+            });
 
-    if (uploadError) throw uploadError;
+        if (uploadError) {
+            console.error('Upload Error Details:', uploadError);
+            throw uploadError;
+        }
 
-    const { data: { publicUrl } } = supabase.storage
-        .from(bucket)
-        .getPublicUrl(filePath);
+        // 3. ดึง Public URL กลับมา
+        const { data: { publicUrl } } = supabase.storage
+            .from(bucket)
+            .getPublicUrl(filePath);
 
-    return publicUrl;
+        return publicUrl;
+    } catch (error) {
+        console.error('Error in uploadImage utility:', error);
+        throw error;
+    }
 };
 
 /**
- * ดึง Path ของไฟล์จาก URL (สำคัญ: ต้องใช้ bucket name ให้ตรงกัน)
+ * ดึง Path ของไฟล์จาก URL
  */
 export const extractStoragePath = (url: string | null | undefined, bucket: string = 'school-images'): string | null => {
     if (!url) return null;
@@ -41,11 +58,10 @@ export const deleteStorageImage = async (url: string | null | undefined, bucket:
 
     try {
         const { error } = await supabase.storage.from(bucket).remove([filePath]);
-        return !error;
+        if (error) throw error;
+        return true;
     } catch (error) {
         console.error('Error deleting file:', error);
         return false;
     }
 };
-
-
