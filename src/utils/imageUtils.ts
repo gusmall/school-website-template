@@ -69,22 +69,11 @@ export const compressImage = (
  * Preset compression options for different use cases
  */
 export const compressionPresets = {
-    // Profile photos, avatars (small, square-ish)
     avatar: { maxWidth: 400, maxHeight: 400, quality: 0.8 },
-
-    // Staff/Admin photos (medium)
     profile: { maxWidth: 600, maxHeight: 800, quality: 0.8 },
-
-    // News cover images (wider)
     cover: { maxWidth: 1200, maxHeight: 800, quality: 0.85 },
-
-    // Gallery photos (high quality)
     gallery: { maxWidth: 1600, maxHeight: 1200, quality: 0.85 },
-
-    // Thumbnails
     thumbnail: { maxWidth: 300, maxHeight: 300, quality: 0.7 },
-
-    // Event images
     event: { maxWidth: 1000, maxHeight: 700, quality: 0.8 },
 };
 
